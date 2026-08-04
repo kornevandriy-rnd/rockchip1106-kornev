@@ -131,8 +131,31 @@ sudo dnf install -y v4l-utils android-tools nmap-ncat ffmpeg
 | `scripts/check-uvc-readiness.sh` | Перевірка готовності до камери: `uvcvideo`, host/gadget, v4l2, RGA/RKNN. | На платі (ssh) |
 | `scripts/capture-frame.sh` | Захват 1 кадру з UVC-камери (авто-пошук `/dev/videoN` + retry) → PNG (normalize). | На платі (ssh) |
 | `scripts/upscale-frame.sh` | Софтовий апскейл кадру 640×512 → 720×720 (letterbox, ffmpeg). | На платі (ssh) |
+| `scripts/stream-mjpeg.sh` | *(експ.)* Живий MJPEG у stdout через цикл одиночних захватів → `ffplay`. | На платі (ssh) |
+| `scripts/stream-to-file.sh` | *(експ.)* Пише кожен кадр у `/tmp/live.jpg` для показу з автооновленням (`feh`). | На платі (ssh) |
 
 ---
+
+## 📺 Живий перегляд на ноут (експериментально)
+
+Поки нема дисплея — теплопотік можна дивитись на Fedora по Ethernet. Пайплайн
+готовий (`scripts/stream-mjpeg.sh` / `stream-to-file.sh`), АЛЕ ⚠️ **впирається в
+той самий EMI**: безперервний або навіть циклічний захват **заклинює камеру** на
+поточному кабелі/хабі. Надійно запрацює лише з **коротким екранованим** кабелем.
+
+Здобуті «граблі» (щоб не вчити заново):
+- **`timeout` на busybox НЕМАЄ** → таймаут захвату робити вручну (фон + `kill`).
+- **Пароль ssh перебиває вивід `ffplay`** у тому ж терміналі → авторизація падає.
+  Рішення — **SSH ControlMaster** (пароль один раз, далі без нього):
+  ```bash
+  ssh -M -S /tmp/lf.sock -fN root@192.168.50.2          # пароль ОДИН раз
+  ssh -S /tmp/lf.sock root@192.168.50.2 'sh /tmp/stream-mjpeg.sh' \
+      | ffplay -hide_banner -f image2pipe -framerate 4 -vcodec mjpeg -
+  ssh -S /tmp/lf.sock -O exit root@192.168.50.2         # закрити майстер
+  ```
+- **`ffplay -f mjpeg` НЕ парсить розмір із живого пайпа** → потрібен `-f image2pipe -vcodec mjpeg`.
+- Запускати **рівно одну** копію стрімера (кілька конкурують за камеру → усі виснуть).
+- Заклинені `v4l2-ctl` (D-state) **не вбиваються** `kill -9` → лише перезапит хаба / ребут.
 
 ## 🗺️ Статус і наступні кроки
 
