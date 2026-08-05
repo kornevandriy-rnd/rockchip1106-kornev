@@ -324,6 +324,21 @@ int main(int argc, char **argv) {
     V4l2Capture cap;
     if (!cap.open(c)) { ::close(cli); RK_MPI_MB_DestroyPool(pool); RK_MPI_VENC_DestroyChn(c.vencChn); RK_MPI_SYS_Exit(); return 1; }
 
+    // 5) Пул DMA-буферів під ВХІДНИЙ YUYV — копія з V4L2-mmap, щоб RGA читала dma-fd
+    const int yuyvSize = c.capW * c.capH * 2;
+    MB_POOL_CONFIG_S srcPoolCfg;
+    memset(&srcPoolCfg, 0, sizeof(srcPoolCfg));
+    srcPoolCfg.u64MBSize   = yuyvSize;
+    srcPoolCfg.u32MBCnt    = 3;
+    srcPoolCfg.enAllocType = MB_ALLOC_TYPE_DMA;
+    srcPoolCfg.enRemapMode = MB_REMAP_MODE_CACHED;
+    MB_POOL srcPool = RK_MPI_MB_CreatePool(&srcPoolCfg);
+    if (srcPool == MB_INVALID_POOLID) {
+        LOGE("MB_CreatePool src");
+        cap.close(); ::close(cli); RK_MPI_MB_DestroyPool(pool);
+        RK_MPI_VENC_DestroyChn(c.vencChn); RK_MPI_SYS_Exit(); return 1;
+    }
+
     LOGI("Старт стріму. Ctrl-C — стоп.");
     VENC_RECV_PIC_PARAM_S recv;
     memset(&recv, 0, sizeof(recv));
@@ -338,18 +353,28 @@ int main(int argc, char **argv) {
         int idx = cap.grab(&yuyv, &ybytes);
         if (idx < 0) break;
 
-        // --- взяти DMA-буфер під NV12 ---
+        // --- DMA-буфер під NV12 (вихід RGA / вхід VENC) ---
         MB_BLK blk = RK_MPI_MB_GetMB(pool, nv12Size, RK_TRUE);
-        if (!blk) { LOGE("GetMB"); cap.requeue(); continue; }
-        void *nv12 = RK_MPI_MB_Handle2VirAddr(blk);
-        int   nfd  = RK_MPI_MB_Handle2Fd(blk);
+        if (!blk) { LOGE("GetMB nv12"); cap.requeue(); continue; }
+        int nfd = RK_MPI_MB_Handle2Fd(blk);
 
-        // --- RGA: YUYV(cap) → NV12(out), із масштабом якщо out != cap ---
-        rga_buffer_t src = wrapbuffer_virtualaddr(yuyv, c.capW, c.capH, RK_FORMAT_YUYV_422);
+        // --- копія YUYV із V4L2-mmap у DMA-буфер ---
+        // RGA не імпортує V4L2-mmap за віртуальною адресою (device-memory) → падає.
+        // Кладемо кадр у DMA-MB і віддаємо RGA як dma-fd.
+        MB_BLK sblk = RK_MPI_MB_GetMB(srcPool, (RK_U64)yuyvSize, RK_TRUE);
+        if (!sblk) { LOGE("GetMB src"); RK_MPI_MB_ReleaseMB(blk); cap.requeue(); continue; }
+        memcpy(RK_MPI_MB_Handle2VirAddr(sblk), yuyv,
+               ybytes < (size_t)yuyvSize ? ybytes : (size_t)yuyvSize);
+        int sfd = RK_MPI_MB_Handle2Fd(sblk);
+        cap.requeue(); // V4L2-буфер повертаємо одразу після копії
+        RK_MPI_SYS_MmzFlushCache(sblk, RK_FALSE);
+
+        // --- RGA: YUYV → NV12 (+масштаб, якщо out != cap) ---
+        rga_buffer_t src = wrapbuffer_fd(sfd, c.capW, c.capH, RK_FORMAT_YUYV_422);
         rga_buffer_t dst = wrapbuffer_fd(nfd, c.outW, c.outH, RK_FORMAT_YCbCr_420_SP);
         IM_STATUS st = imcvtcolor(src, dst, src.format, dst.format);
-        cap.requeue(); // YUYV-буфер більше не потрібен — повертаємо в кільце
-        if (st != IM_STATUS_SUCCESS) {
+        RK_MPI_MB_ReleaseMB(sblk);
+        if (st <= 0) { // 0=FAILED, <0=помилки; 1=SUCCESS, 2=NOERROR
             LOGE("RGA imcvtcolor: %d (%s)", st, imStrError(st));
             RK_MPI_MB_ReleaseMB(blk);
             continue;
@@ -402,6 +427,7 @@ int main(int argc, char **argv) {
     RK_MPI_VENC_StopRecvFrame(c.vencChn);
     RK_MPI_VENC_DestroyChn(c.vencChn);
     RK_MPI_MB_DestroyPool(pool);
+    RK_MPI_MB_DestroyPool(srcPool);
     if (cli >= 0) ::close(cli);
     cap.close();
     RK_MPI_SYS_Exit();
