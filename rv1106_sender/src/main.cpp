@@ -437,6 +437,14 @@ public:
             std::fprintf(stderr, "RK_MPI_VENC_GetStream timeout/failure\n");
             return false;
         }
+        // VEPU wrote this DMA buffer. Invalidate the CPU-side mapping before
+        // reading it; otherwise Cortex-A7 may send stale cache lines and
+        // produce intermittently corrupted HEVC NAL units.
+        if (RK_MPI_SYS_MmzFlushCache(pack_.pMbBlk, RK_TRUE) != RK_SUCCESS) {
+            std::fprintf(stderr, "Encoded-buffer cache invalidation failed\n");
+            RK_MPI_VENC_ReleaseStream(0, &stream_);
+            return false;
+        }
         // Rockit returns an MB handle whose virtual address already points to
         // the valid pack data. Do not add u32Offset here: the official RV1106
         // samples send Handle2VirAddr(pMbBlk), u32Len directly. Adding the

@@ -16,6 +16,10 @@ buffer to an MMZ/DMA buffer. RGA scaling/color conversion and H.265 encoding
 are hardware accelerated. This fallback is intentional because many UVC
 drivers do not support `VIDIOC_EXPBUF`.
 
+The sender explicitly synchronizes MMZ caches both after the CPU writes the
+camera frame and before the CPU reads the VEPU bitstream. Omitting the latter
+can result in intermittent invalid HEVC NAL/RPS/POC errors on RV1106.
+
 ## 1. Confirm the camera mode
 
 On the board:
