@@ -57,6 +57,10 @@ options with:
 ./rv1106_sender --help
 ```
 
+While streaming, the sender prints measured pipeline FPS and V4L2 sequence
+drops every two seconds. This distinguishes a camera/USB FPS problem from an
+RGA/VENC/network problem.
+
 If the board firewall is enabled, allow TCP port 5000. Find the Ethernet IP
 with `ip addr`.
 
@@ -76,8 +80,9 @@ Run it with the board's IP address:
 ./fedora_receiver 192.168.1.50 5000
 ```
 
-The receiver starts `ffplay` with low-latency options and forwards the raw
-Annex-B H.265 stream to it. Stop with Ctrl-C.
+The receiver replaces itself with `ffplay`, which connects directly to the
+board. Avoiding an intermediate pipe removes one buffering/backpressure point.
+Stop with Ctrl-C.
 
 ## Diagnostics
 

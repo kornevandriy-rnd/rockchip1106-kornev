@@ -13,6 +13,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <cstdio>
@@ -22,7 +23,6 @@
 #include <vector>
 
 #include "im2d.hpp"
-#include "rga.h"          // RK_FORMAT_YUYV_422 / RK_FORMAT_YCbCr_420_SP (у цій версії RGA не тягнуться через im2d.hpp)
 #include "rk_mpi_mb.h"
 #include "rk_mpi_sys.h"
 #include "rk_mpi_venc.h"
@@ -32,6 +32,13 @@ namespace {
 volatile sig_atomic_t g_stop = 0;
 
 void on_signal(int) { g_stop = 1; }
+
+uint64_t monotonic_ms() {
+    timespec now{};
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return static_cast<uint64_t>(now.tv_sec) * 1000ULL +
+           static_cast<uint64_t>(now.tv_nsec) / 1000000ULL;
+}
 
 struct Config {
     std::string device = "/dev/video0";
@@ -359,11 +366,7 @@ public:
                                          RK_FORMAT_YUYV_422);
         output_image_ = wrapbuffer_handle(output_rga_, cfg.output_width, cfg.output_height,
                                           RK_FORMAT_YCbCr_420_SP);
-        // У версії RGA-хедерів цього SDK imcheck — макрос (бере &арг), тож замість
-        // тимчасових {} передаємо іменовану обнулену im_rect (сумісно і з макросом, і з C++-функцією).
-        im_rect no_rect;
-        std::memset(&no_rect, 0, sizeof(no_rect));
-        IM_STATUS check = imcheck(input_image_, output_image_, no_rect, no_rect, 0);
+        IM_STATUS check = imcheck(input_image_, output_image_, {}, {}, 0);
         if (check != IM_STATUS_NOERROR) {
             std::fprintf(stderr, "RGA configuration rejected: %s\n", imStrError(check));
             return false;
@@ -400,7 +403,7 @@ public:
             return false;
         }
         venc_started_ = true;
-        stream_.pstPack = packs_;
+        stream_.pstPack = &pack_;
         return true;
     }
 
@@ -429,21 +432,17 @@ public:
             std::fprintf(stderr, "RK_MPI_VENC_SendFrame failed\n");
             return false;
         }
-        std::memset(packs_, 0, sizeof(packs_));
-        stream_.u32PackCount = 0;
+        std::memset(&pack_, 0, sizeof(pack_));
         if (RK_MPI_VENC_GetStream(0, &stream_, 1000) != RK_SUCCESS) {
             std::fprintf(stderr, "RK_MPI_VENC_GetStream timeout/failure\n");
             return false;
         }
-        // Надсилаємо ВСІ packs кадру (а не лише перший): інакше IDR (VPS/SPS/PPS/слайс,
-        // що йдуть окремими packs) доходить обрізаним і декодер не збирає ключовий кадр.
-        bool sent = true;
-        for (RK_U32 i = 0; i < stream_.u32PackCount && sent; ++i) {
-            void *encoded = RK_MPI_MB_Handle2VirAddr(packs_[i].pMbBlk);
-            if (!encoded) { sent = false; break; }
-            sent = network.send_all(static_cast<unsigned char *>(encoded) + packs_[i].u32Offset,
-                                    packs_[i].u32Len);
-        }
+        // Rockit returns an MB handle whose virtual address already points to
+        // the valid pack data. Do not add u32Offset here: the official RV1106
+        // samples send Handle2VirAddr(pMbBlk), u32Len directly. Adding the
+        // offset a second time truncates HEVC NAL units and breaks references.
+        void *encoded = RK_MPI_MB_Handle2VirAddr(pack_.pMbBlk);
+        bool sent = encoded && network.send_all(encoded, pack_.u32Len);
         RK_MPI_VENC_ReleaseStream(0, &stream_);
         return sent;
     }
@@ -472,7 +471,7 @@ private:
     rga_buffer_handle_t output_rga_ = 0;
     rga_buffer_t input_image_{};
     rga_buffer_t output_image_{};
-    VENC_PACK_S packs_[16]{};   // кадр може складатися з кількох packs (VPS/SPS/PPS/слайс)
+    VENC_PACK_S pack_{};
     VENC_STREAM_S stream_{};
 };
 
@@ -495,13 +494,26 @@ int main(int argc, char **argv) {
                 cfg.output_width, cfg.output_height, cfg.bitrate_kbps);
 
     uint64_t sequence = 0;
+    uint64_t stats_started_ms = monotonic_ms();
+    uint64_t stats_frames = 0;
+    uint64_t camera_drops = 0;
+    uint32_t previous_camera_sequence = 0;
+    bool have_camera_sequence = false;
     while (!g_stop) {
         if (!network.wait_for_client()) break;
         pipeline.request_idr();
+        stats_started_ms = monotonic_ms();
+        stats_frames = 0;
+        camera_drops = 0;
+        have_camera_sequence = false;
         while (!g_stop) {
             v4l2_buffer buffer{};
             const void *data = nullptr;
             if (!camera.dequeue(buffer, data)) continue;
+            if (have_camera_sequence && buffer.sequence > previous_camera_sequence + 1)
+                camera_drops += buffer.sequence - previous_camera_sequence - 1;
+            previous_camera_sequence = buffer.sequence;
+            have_camera_sequence = true;
             bool ok = pipeline.encode(data, sequence++, network);
             if (!camera.requeue(buffer)) {
                 std::fprintf(stderr, "VIDIOC_QBUF failed: %s\n", std::strerror(errno));
@@ -509,6 +521,18 @@ int main(int argc, char **argv) {
                 break;
             }
             if (!ok) break;
+            ++stats_frames;
+            uint64_t now_ms = monotonic_ms();
+            uint64_t elapsed_ms = now_ms - stats_started_ms;
+            if (elapsed_ms >= 2000) {
+                double measured_fps = stats_frames * 1000.0 / elapsed_ms;
+                std::printf("Pipeline: %.1f fps, V4L2 dropped frames: %llu\n",
+                            measured_fps,
+                            static_cast<unsigned long long>(camera_drops));
+                stats_started_ms = now_ms;
+                stats_frames = 0;
+                camera_drops = 0;
+            }
         }
     }
     return EXIT_SUCCESS;
