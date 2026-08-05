@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "im2d.hpp"
+#include "rga.h"          // RK_FORMAT_YUYV_422 / RK_FORMAT_YCbCr_420_SP (у цій версії RGA не тягнуться через im2d.hpp)
 #include "rk_mpi_mb.h"
 #include "rk_mpi_sys.h"
 #include "rk_mpi_venc.h"
