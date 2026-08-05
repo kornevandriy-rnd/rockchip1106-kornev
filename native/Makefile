@@ -40,10 +40,13 @@ RGA_LIB   ?= $(RGA_DIR)/lib/gcc-uclib-armhf
 BUILD_DIR := build
 BIN       := $(BUILD_DIR)/thermal_stream
 
-CXXFLAGS := -O2 -Wall -std=c++17 \
+CXXFLAGS := -O2 -Wall -std=c++11 \
             -I$(RKMPI_INC) -I$(RGA_INC)
+# --allow-shlib-undefined: не вимагати транзитивні залежності librockit під час
+# лінковки (librockchip_mpp тощо) — вони підтягнуться на платі у рантаймі.
 LDFLAGS  := -L$(RKMPI_LIB) -L$(RGA_LIB) \
             -lrockit -lrga -lpthread \
+            -Wl,--allow-shlib-undefined \
             -Wl,-rpath-link=$(RKMPI_LIB) -Wl,-rpath-link=$(RGA_LIB)
 
 .PHONY: all clean check
