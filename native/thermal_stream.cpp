@@ -298,15 +298,14 @@ int main(int argc, char **argv) {
     signal(SIGTERM, on_sig);
     signal(SIGPIPE, SIG_IGN);
 
-    // 1) Камера
-    V4l2Capture cap;
-    if (!cap.open(c)) return 1;
-
-    // 2) rockit + енкодер
+    // 1) rockit + апаратний енкодер — ІНІЦІАЛІЗУЄМО ПЕРШИМИ.
+    //    Якщо камеру відкрити ДО RK_MPI_SYS_Init, ініціалізація rockit/медіа-підсистеми
+    //    збиває вже активний V4L2-стрім USB-камери і перший DQBUF повертає ENODEV
+    //    ("No such device"). Тому камеру відкриваємо/стрімимо ОСТАННЬОЮ.
     if (RK_MPI_SYS_Init() != RK_SUCCESS) { LOGE("RK_MPI_SYS_Init"); return 1; }
-    if (!venc_init(c)) return 1;
+    if (!venc_init(c)) { RK_MPI_SYS_Exit(); return 1; }
 
-    // 3) Пул DMA-буферів під NV12 (вихід RGA / вхід VENC)
+    // 2) Пул DMA-буферів під NV12 (вихід RGA / вхід VENC)
     const int nv12Size = c.outW * c.outH * 3 / 2;
     MB_POOL_CONFIG_S poolCfg;
     memset(&poolCfg, 0, sizeof(poolCfg));
@@ -315,11 +314,15 @@ int main(int argc, char **argv) {
     poolCfg.enAllocType  = MB_ALLOC_TYPE_DMA;
     poolCfg.enRemapMode  = MB_REMAP_MODE_CACHED;
     MB_POOL pool = RK_MPI_MB_CreatePool(&poolCfg);
-    if (pool == MB_INVALID_POOLID) { LOGE("MB_CreatePool"); return 1; }
+    if (pool == MB_INVALID_POOLID) { LOGE("MB_CreatePool"); RK_MPI_VENC_DestroyChn(c.vencChn); RK_MPI_SYS_Exit(); return 1; }
 
-    // 4) Мережа — чекаємо плеєр
+    // 3) Мережа — чекаємо плеєр (щоб не стрімити камеру «в нікуди»)
     int cli = tcp_listen_accept(c.port);
-    if (cli < 0) return 1;
+    if (cli < 0) { RK_MPI_MB_DestroyPool(pool); RK_MPI_VENC_DestroyChn(c.vencChn); RK_MPI_SYS_Exit(); return 1; }
+
+    // 4) Камера — відкриваємо й вмикаємо стрім ОСТАННЬОЮ, коли rockit готовий і клієнт під'єднаний
+    V4l2Capture cap;
+    if (!cap.open(c)) { ::close(cli); RK_MPI_MB_DestroyPool(pool); RK_MPI_VENC_DestroyChn(c.vencChn); RK_MPI_SYS_Exit(); return 1; }
 
     LOGI("Старт стріму. Ctrl-C — стоп.");
     VENC_RECV_PIC_PARAM_S recv;
