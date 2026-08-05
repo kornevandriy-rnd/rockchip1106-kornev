@@ -85,6 +85,7 @@ class V4l2Capture {
 public:
     bool open(const Config &c) {
         cfg_ = c;
+        n_ = 0;
         fd_ = ::open(cfg_.dev.c_str(), O_RDWR | O_NONBLOCK, 0);
         if (fd_ < 0) { LOGE("open %s: %s", cfg_.dev.c_str(), strerror(errno)); return false; }
 
@@ -131,6 +132,22 @@ public:
         v4l2_buf_type t = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         if (xioctl(VIDIOC_STREAMON, &t) < 0) { LOGE("STREAMON: %s", strerror(errno)); return false; }
         return true;
+    }
+
+    // Відкрити камеру, автоматично знайшовши ноду. Після USB-реенумерації номер
+    // /dev/videoN «плаває», тож пробуємо задану ноду, далі скануємо /dev/video0..24
+    // й беремо ту, що приймає YUYV у нашій роздільності.
+    bool openAuto(Config &c) {
+        if (open(c)) return true;
+        close();
+        for (int i = 0; i <= 24; ++i) {
+            Config t = c;
+            t.dev = "/dev/video" + std::to_string(i);
+            if (t.dev == c.dev) continue;
+            if (open(t)) { c.dev = t.dev; return true; }
+            close();
+        }
+        return false;
     }
 
     // Блокуюче очікування кадру (select). Повертає індекс і вказівник на YUYV.
@@ -322,7 +339,7 @@ int main(int argc, char **argv) {
 
     // 4) Камера — відкриваємо й вмикаємо стрім ОСТАННЬОЮ, коли rockit готовий і клієнт під'єднаний
     V4l2Capture cap;
-    if (!cap.open(c)) { ::close(cli); RK_MPI_MB_DestroyPool(pool); RK_MPI_VENC_DestroyChn(c.vencChn); RK_MPI_SYS_Exit(); return 1; }
+    if (!cap.openAuto(c)) { ::close(cli); RK_MPI_MB_DestroyPool(pool); RK_MPI_VENC_DestroyChn(c.vencChn); RK_MPI_SYS_Exit(); return 1; }
 
     // 5) Пул DMA-буферів під ВХІДНИЙ YUYV — копія з V4L2-mmap, щоб RGA читала dma-fd
     const int yuyvSize = c.capW * c.capH * 2;
@@ -351,7 +368,20 @@ int main(int argc, char **argv) {
         // --- захопити YUYV ---
         void *yuyv = nullptr; size_t ybytes = 0;
         int idx = cap.grab(&yuyv, &ybytes);
-        if (idx < 0) break;
+        if (idx < 0) {
+            // Камера відвалилась (USB-реенумерація: DQBUF=ENODEV). Стрім НЕ рвемо —
+            // перевідкриваємо камеру (нода могла змінитись), VENC/мережу тримаємо.
+            LOGE("Втрата камери — перевідкриваю (VENC/мережа лишаються)…");
+            cap.close();
+            bool ok = false;
+            for (int t = 0; t < 30 && !g_stop && alive; ++t) {
+                usleep(400 * 1000);
+                if (cap.openAuto(c)) { ok = true; break; }
+            }
+            if (!ok) { LOGE("Камера не повернулась за ~12с — вихід."); break; }
+            LOGI("Камера повернулась (%s), продовжую.", c.dev.c_str());
+            continue;
+        }
 
         // --- DMA-буфер під NV12 (вихід RGA / вхід VENC) ---
         MB_BLK blk = RK_MPI_MB_GetMB(pool, nv12Size, RK_TRUE);
