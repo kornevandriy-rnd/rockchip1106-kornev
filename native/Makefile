@@ -26,15 +26,14 @@ CXX := $(TOOLCHAIN_BIN)/$(TOOLCHAIN_PREFIX)-g++
 
 # ── Шляхи до RK_MPI (rockit) ──────────────────────────────────────────────────
 # RKMPI_INC — тека, де лежить rk_mpi_venc.h (та сусідні rk_mpi_*.h / rk_comm_*.h)
-# RKMPI_LIB — тека з librockit.so
-RKMPI_INC ?= $(LUCKFOX_SDK_DIR)/media/rockit/rockit/include
-RKMPI_LIB ?= $(LUCKFOX_SDK_DIR)/media/rockit/rockit/lib
+# RKMPI_LIB — тека з librockit.so (за замовчуванням prebuilt/ — скопійована з плати)
+RKMPI_INC ?= $(LUCKFOX_SDK_DIR)/media/rockit/rockit/mpi/sdk/include
+RKMPI_LIB ?= prebuilt
 
 # ── Шляхи до RGA ──────────────────────────────────────────────────────────────
-# За замовчуванням беремо librga з каркаса rv1106-upscale (third_party).
-RGA_DIR   ?= ../third_party/librga
-RGA_INC   ?= $(RGA_DIR)/include
-RGA_LIB   ?= $(RGA_DIR)/lib/gcc-uclib-armhf
+# Хедери im2d — зі SDK (API однаковий для всіх SoC); librga.so — з плати (prebuilt/).
+RGA_INC   ?= $(LUCKFOX_SDK_DIR)/media/rga/release_rga_rk3588_aarch64-rockchip1031-linux-gnu/include/rga
+RGA_LIB   ?= prebuilt
 
 # ── Прапорці ──────────────────────────────────────────────────────────────────
 BUILD_DIR := build
