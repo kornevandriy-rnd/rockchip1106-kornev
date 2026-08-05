@@ -1,0 +1,4 @@
+prebuilt/
+rv1106_sender/rv1106_sender
+fedora_receiver/fedora_receiver
+**/build/
