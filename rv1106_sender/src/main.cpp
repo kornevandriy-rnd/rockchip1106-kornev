@@ -358,7 +358,11 @@ public:
                                          RK_FORMAT_YUYV_422);
         output_image_ = wrapbuffer_handle(output_rga_, cfg.output_width, cfg.output_height,
                                           RK_FORMAT_YCbCr_420_SP);
-        IM_STATUS check = imcheck(input_image_, output_image_, {}, {}, 0);
+        // У версії RGA-хедерів цього SDK imcheck — макрос (бере &арг), тож замість
+        // тимчасових {} передаємо іменовану обнулену im_rect (сумісно і з макросом, і з C++-функцією).
+        im_rect no_rect;
+        std::memset(&no_rect, 0, sizeof(no_rect));
+        IM_STATUS check = imcheck(input_image_, output_image_, no_rect, no_rect, 0);
         if (check != IM_STATUS_NOERROR) {
             std::fprintf(stderr, "RGA configuration rejected: %s\n", imStrError(check));
             return false;
