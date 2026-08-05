@@ -400,7 +400,7 @@ public:
             return false;
         }
         venc_started_ = true;
-        stream_.pstPack = &pack_;
+        stream_.pstPack = packs_;
         return true;
     }
 
@@ -429,14 +429,21 @@ public:
             std::fprintf(stderr, "RK_MPI_VENC_SendFrame failed\n");
             return false;
         }
-        std::memset(&pack_, 0, sizeof(pack_));
+        std::memset(packs_, 0, sizeof(packs_));
+        stream_.u32PackCount = 0;
         if (RK_MPI_VENC_GetStream(0, &stream_, 1000) != RK_SUCCESS) {
             std::fprintf(stderr, "RK_MPI_VENC_GetStream timeout/failure\n");
             return false;
         }
-        void *encoded = RK_MPI_MB_Handle2VirAddr(pack_.pMbBlk);
-        bool sent = encoded && network.send_all(static_cast<unsigned char *>(encoded) + pack_.u32Offset,
-                                                pack_.u32Len);
+        // Надсилаємо ВСІ packs кадру (а не лише перший): інакше IDR (VPS/SPS/PPS/слайс,
+        // що йдуть окремими packs) доходить обрізаним і декодер не збирає ключовий кадр.
+        bool sent = true;
+        for (RK_U32 i = 0; i < stream_.u32PackCount && sent; ++i) {
+            void *encoded = RK_MPI_MB_Handle2VirAddr(packs_[i].pMbBlk);
+            if (!encoded) { sent = false; break; }
+            sent = network.send_all(static_cast<unsigned char *>(encoded) + packs_[i].u32Offset,
+                                    packs_[i].u32Len);
+        }
         RK_MPI_VENC_ReleaseStream(0, &stream_);
         return sent;
     }
@@ -465,7 +472,7 @@ private:
     rga_buffer_handle_t output_rga_ = 0;
     rga_buffer_t input_image_{};
     rga_buffer_t output_image_{};
-    VENC_PACK_S pack_{};
+    VENC_PACK_S packs_[16]{};   // кадр може складатися з кількох packs (VPS/SPS/PPS/слайс)
     VENC_STREAM_S stream_{};
 };
 
