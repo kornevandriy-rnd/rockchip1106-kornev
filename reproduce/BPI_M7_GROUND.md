@@ -112,4 +112,5 @@ DISPLAY=:0 gst-launch-1.0 tcpclientsrc host=192.168.50.2 port=5000 \
 
 Замінити прямий Ethernet-кабель цифровим радіоканалом (Sine.video Beam):
 RV1106 → радіо-Tx … радіо-Rx → BPI-M7. Для цього sender-у, ймовірно, доведеться
-перейти з TCP на UDP/RTP/SRT (питання до виробника радіо — у корені репозиторію).
+перейти з TCP на UDP/RTP/SRT. Питання до виробника радіо і план інтеграції —
+[`../docs/RADIO_LINK_SINE.md`](../docs/RADIO_LINK_SINE.md).
