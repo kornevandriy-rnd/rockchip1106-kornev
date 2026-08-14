@@ -78,6 +78,14 @@ BOARD_IP=192.168.50.2 ./reproduce/04_run_receiver.sh  # ffplay
 3. **`RK_MPI_SYS_MmzFlushCache(pack.pMbBlk, RK_TRUE)`** перед читанням виходу
    VEPU — інакше CPU читає застарілий кеш → биті NAL.
 
+## Наземна станція на RK3588 (замість ноута)
+
+Приймати й декодувати стрім можна не лише на ноуті, а й на **Banana Pi BPI-M7
+(RK3588)** — апаратним декодером Rockchip MPP з виводом на HDMI. Плати з'єднуються
+прямим Ethernet-кабелем (крок до майбутнього радіоканалу). Повна інструкція:
+[`BPI_M7_GROUND.md`](BPI_M7_GROUND.md); запуск приймача на BPI —
+[`05_run_bpi_receiver.sh`](05_run_bpi_receiver.sh).
+
 ## Типові проблеми
 
 | Симптом | Причина / рішення |
