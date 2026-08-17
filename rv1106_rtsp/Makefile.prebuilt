@@ -1,0 +1,52 @@
+# Makefile — збірка RTSP-відправника (rv1106_rtsp) для Beam.
+# Той самий підхід, що і rv1106_sender/Makefile.prebuilt:
+#   тулчейн Luckfox SDK + хедери RK_MPI/RGA зі SDK + готові .so з ПЛАТИ (prebuilt/),
+# ПЛЮС статичний RTSP-сервер librtsp.a зі SDK (common_algorithm/misc).
+#
+# Кроки:
+#   1) три бібліотеки з плати у prebuilt/ (можна скопіювати з ../rv1106_sender/prebuilt):
+#        mkdir -p prebuilt
+#        scp root@192.168.50.2:/oem/usr/lib/librockit.so        prebuilt/
+#        scp root@192.168.50.2:/oem/usr/lib/librockchip_mpp.so  prebuilt/
+#        scp root@192.168.50.2:/oem/usr/lib/librga.so           prebuilt/
+#   2) make -f Makefile.prebuilt LUCKFOX_SDK_DIR=$HOME/luckfox-pico
+
+LUCKFOX_SDK_DIR  ?= $(HOME)/luckfox-pico
+TOOLCHAIN_BIN    ?= $(LUCKFOX_SDK_DIR)/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf/bin
+TOOLCHAIN_PREFIX ?= arm-rockchip830-linux-uclibcgnueabihf
+CXX := $(TOOLCHAIN_BIN)/$(TOOLCHAIN_PREFIX)-g++
+
+# Хедери RK_MPI (rockit), RGA (im2d.hpp) і RTSP (rtsp_demo.h) — зі SDK.
+RKMPI_INC ?= $(LUCKFOX_SDK_DIR)/media/rockit/rockit/mpi/sdk/include
+RGA_INC   ?= $(LUCKFOX_SDK_DIR)/media/rga/release_rga_rv1106_arm-rockchip830-linux-uclibcgnueabihf/include/rga
+RTSP_DIR  ?= $(LUCKFOX_SDK_DIR)/media/common_algorithm/common_algorithm/misc
+RTSP_INC  ?= $(RTSP_DIR)/include
+RTSP_LIB  ?= $(RTSP_DIR)/lib/arm-rockchip830-linux-uclibcgnueabihf/librtsp.a
+# Готові .so з плати:
+LIBDIR    ?= prebuilt
+
+TARGET := rv1106_rtsp
+CXXFLAGS := -O2 -g -std=gnu++11 -Wall -Wextra -DRV1106_RV1103 \
+            -I$(RKMPI_INC) -I$(RGA_INC) -I$(RTSP_INC)
+LDFLAGS  := -L$(LIBDIR) -lrockit -lrockchip_mpp -lrga -lpthread -lm \
+            -Wl,--allow-shlib-undefined -Wl,-rpath-link=$(LIBDIR)
+
+.PHONY: all clean check
+all: check $(TARGET)
+
+check:
+	@[ -x "$(CXX)" ] || { echo "!!! нема компілятора: $(CXX) (постав LUCKFOX_SDK_DIR)"; exit 1; }
+	@[ -f "$(RKMPI_INC)/rk_mpi_venc.h" ] || { echo "!!! нема rk_mpi_venc.h у RKMPI_INC=$(RKMPI_INC)"; exit 1; }
+	@[ -f "$(RGA_INC)/im2d.hpp" ] || { echo "!!! нема im2d.hpp у RGA_INC=$(RGA_INC) — знайди: find \$$LUCKFOX_SDK_DIR -name im2d.hpp"; exit 1; }
+	@[ -f "$(RTSP_INC)/rtsp_demo.h" ] || { echo "!!! нема rtsp_demo.h у RTSP_INC=$(RTSP_INC)"; exit 1; }
+	@[ -f "$(RTSP_LIB)" ] || { echo "!!! нема librtsp.a: $(RTSP_LIB)"; exit 1; }
+	@[ -f "$(LIBDIR)/librockit.so" ] && [ -f "$(LIBDIR)/librockchip_mpp.so" ] && [ -f "$(LIBDIR)/librga.so" ] \
+	  || { echo "!!! у $(LIBDIR)/ потрібні librockit.so, librockchip_mpp.so, librga.so (scp з плати або cp з ../rv1106_sender/prebuilt)"; exit 1; }
+
+$(TARGET): src/rtsp_sender.cpp
+	$(CXX) $(CXXFLAGS) $< $(RTSP_LIB) -o $@ $(LDFLAGS)
+	@echo "Готово: $(TARGET)"
+	@echo "На плату:  scp $(TARGET) root@192.168.50.2:/root/"
+
+clean:
+	$(RM) $(TARGET)
