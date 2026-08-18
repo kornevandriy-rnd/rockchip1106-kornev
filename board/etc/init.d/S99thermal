@@ -1,77 +1,135 @@
 #!/bin/sh
 #
-# S99thermal — автозапуск тепловізійного H.265-sender'а на RV1106.
+# S99thermal — автозапуск + watchdog тепловізійного H.265-sender'а на RV1106.
 #
-# Виконується BusyBox-ініт (rcS) ПІСЛЯ штатного S21appinit, який стартує камерний
-# застосунок rkipc. Тут ми: коректно зупиняємо rkipc/ispserver (щоб звільнити
-# камеру й VEPU), чекаємо появи USB-камери (YUYV-нода «плаває»), і піднімаємо
-# /root/rv1106_sender як TCP-сервер H.265 на :5000. Лог — /tmp/thermal.log.
+# Мета: увімкнув плату → sender уже слухає :5000; на землі (BPI) лише приймач.
+# Жодних команд на плату слати не треба, і рідкісний блип USB-камери
+# (спонтанна переенумерація) залічується сам.
 #
-# Мета: увімкнув плату → sender уже слухає; на землі (BPI) лише запустити приймач.
+# Що робить:
+#   1) зупиняє штатний камерний застосунок rkipc (RkLunch-stop.sh) — звільняє
+#      камеру й апаратний енкодер;
+#   2) вимикає USB-autosuspend (часта причина спонтанної переенумерації);
+#   3) чекає USB-камеру (YUYV-нода, номер «плаває») і піднімає rv1106_sender;
+#   4) WATCHDOG: якщо камера переенумерувалась (змінився devnum) або sender
+#      впав — гасить старий процес і піднімає новий на свіжій ноді.
 #
-# Встановлення на плату:  покласти в /etc/init.d/S99thermal, chmod +x.
-# Ручне керування:        /etc/init.d/S99thermal {start|stop|restart|status}
+# Логи: /tmp/thermal.log (sender), /tmp/thermal_watchdog.log (наглядач).
+# Керування: /etc/init.d/S99thermal {start|stop|restart|status}
 
 BIN=/root/rv1106_sender
 LOG=/tmp/thermal.log
+WLOG=/tmp/thermal_watchdog.log
+PIDFILE=/tmp/thermal_sup.pid
 PORT=5000
 FPS=60
 export LD_LIBRARY_PATH=/oem/usr/lib
 
-find_cam() {
-    for v in /dev/video*; do
-        v4l2-ctl -d "$v" --list-formats 2>/dev/null | grep -q YUYV && { echo "$v"; return 0; }
+# devnum USB-камери Seek (VID 3474); змінюється при кожній переенумерації
+cam_devnum() {
+    for d in /sys/bus/usb/devices/*; do
+        if [ "$(cat "$d/idVendor" 2>/dev/null)" = "3474" ]; then
+            cat "$d/devnum" 2>/dev/null; return 0
+        fi
     done
     return 1
 }
 
-start() {
-    # 1) звільнити камеру/енкодер від штатного застосунку
+# перша YUYV-нода (USB-камера)
+cam_node() {
+    for v in /dev/video*; do
+        if v4l2-ctl -d "$v" --list-formats 2>/dev/null | grep -q YUYV; then
+            echo "$v"; return 0
+        fi
+    done
+    return 1
+}
+
+disable_autosuspend() {
+    for f in /sys/bus/usb/devices/*/power/control; do echo on > "$f" 2>/dev/null; done
+    for f in /sys/bus/usb/devices/*/power/autosuspend_delay_ms; do echo -1 > "$f" 2>/dev/null; done
+}
+
+launch_sender() {
+    CAM=$(cam_node) || { echo "$(date) launch: камери нема" >> "$WLOG"; return 1; }
+    echo "=== $(date) === старт на $CAM ($PORT/${FPS}fps)" >> "$LOG"
+    "$BIN" --device "$CAM" --port "$PORT" --fps "$FPS" >> "$LOG" 2>&1 &
+    SENDER_PID=$!
+    echo "$(date) sender pid $SENDER_PID на $CAM" >> "$WLOG"
+    return 0
+}
+
+wait_cam() {
+    i=0
+    while [ $i -lt 30 ]; do
+        cam_node >/dev/null 2>&1 && return 0
+        i=$((i + 1)); sleep 1
+    done
+    return 1
+}
+
+supervise() {
     [ -x /oem/usr/bin/RkLunch-stop.sh ] && /oem/usr/bin/RkLunch-stop.sh >/dev/null 2>&1
     killall -9 rkipc ispserver rv1106_sender rv1106_rtsp 2>/dev/null
     sleep 2
+    disable_autosuspend
+    wait_cam || echo "$(date) камера не зʼявилась за 30с" >> "$WLOG"
+    launch_sender
+    LAST=$(cam_devnum)
 
-    # 2) дочекатись YUYV-ноди камери (USB-енумерація може запізнюватись)
-    CAM=""; i=0
-    while [ $i -lt 30 ]; do
-        CAM=$(find_cam) && [ -n "$CAM" ] && break
-        i=$((i + 1)); sleep 1
-    done
-    if [ -z "$CAM" ]; then
-        echo "=== $(date) === камера (YUYV) не знайдена — перевір хаб/землю" >> "$LOG"
-        exit 1
-    fi
-
-    # 3) запустити sender; кілька спроб на випадок, якщо камера/VEPU ще зайняті
-    n=0
-    while [ $n -lt 5 ]; do
-        echo "=== $(date) === старт на $CAM (спроба $n), $PORT/${FPS}fps" >> "$LOG"
-        "$BIN" --device "$CAM" --port "$PORT" --fps "$FPS" >> "$LOG" 2>&1 &
-        PID=$!
-        sleep 3
-        if kill -0 "$PID" 2>/dev/null; then
-            echo "sender працює, pid $PID" >> "$LOG"
-            return 0
+    while true; do
+        sleep 5
+        NOW=$(cam_devnum)
+        # 1) камера переенумерувалась → нода/fd застаріли → перезапуск
+        if [ -n "$NOW" ] && [ -n "$LAST" ] && [ "$NOW" != "$LAST" ]; then
+            echo "$(date) камера переенумерувалась ($LAST->$NOW) → рестарт sender" >> "$WLOG"
+            kill -9 "$SENDER_PID" 2>/dev/null; killall -9 rv1106_sender 2>/dev/null
+            sleep 1; disable_autosuspend; launch_sender; LAST=$(cam_devnum); continue
         fi
-        echo "sender вийшов рано (камера/VEPU зайняті?), повтор" >> "$LOG"
-        killall -9 rkipc ispserver 2>/dev/null
-        n=$((n + 1)); sleep 2
+        # 2) sender впав → перезапуск
+        if ! kill -0 "$SENDER_PID" 2>/dev/null; then
+            echo "$(date) sender зник → рестарт" >> "$WLOG"
+            sleep 1; launch_sender; LAST=$(cam_devnum); continue
+        fi
+        # 3) камера повністю зникла → чекаємо, скидаємо, перезапускаємо
+        if [ -z "$NOW" ]; then
+            echo "$(date) камера зникла → чекаю появи" >> "$WLOG"
+            kill -9 "$SENDER_PID" 2>/dev/null; killall -9 rv1106_sender 2>/dev/null
+            wait_cam
+            sleep 1; disable_autosuspend; launch_sender; LAST=$(cam_devnum)
+        fi
     done
-    echo "=== $(date) === не вдалося підняти sender після 5 спроб" >> "$LOG"
-    exit 1
+}
+
+start() {
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        echo "supervisor вже працює (pid $(cat "$PIDFILE"))"; return 0
+    fi
+    supervise >> "$WLOG" 2>&1 &
+    echo $! > "$PIDFILE"
+    echo "supervisor запущено (pid $(cat "$PIDFILE"))"
 }
 
 stop() {
+    [ -f "$PIDFILE" ] && kill -9 "$(cat "$PIDFILE")" 2>/dev/null
+    rm -f "$PIDFILE"
     killall -9 rv1106_sender 2>/dev/null
+    echo "зупинено"
 }
 
 status() {
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        echo "supervisor ПРАЦЮЄ (pid $(cat "$PIDFILE"))"
+    else
+        echo "supervisor не запущений"
+    fi
     if pidof rv1106_sender >/dev/null 2>&1; then
-        echo "rv1106_sender ПРАЦЮЄ (pid $(pidof rv1106_sender))"
+        echo "rv1106_sender ПРАЦЮЄ (pid $(pidof rv1106_sender)), камера devnum=$(cam_devnum)"
     else
         echo "rv1106_sender не запущений"
     fi
-    echo "--- хвіст $LOG ---"; tail -n 8 "$LOG" 2>/dev/null
+    echo "--- $LOG ---"; tail -n 6 "$LOG" 2>/dev/null
+    echo "--- $WLOG ---"; tail -n 6 "$WLOG" 2>/dev/null
 }
 
 case "$1" in

@@ -37,7 +37,14 @@ echo "   Спершу на платі має бути запущений sender 
 # NV12 з декодера йде прямо в апаратний Rockchip-сінк; leaky-черга тримає лише
 # найсвіжіший кадр. Якщо rkximagesink недоступний — заміни на glimagesink sync=false.
 SINK="${SINK:-rkximagesink sync=false}"
-exec gst-launch-1.0 tcpclientsrc host="$BOARD_IP" port="$PORT" \
-    ! h265parse ! mppvideodec \
-    ! queue leaky=downstream max-size-buffers=1 max-size-time=0 max-size-bytes=0 \
-    ! $SINK
+echo "   (авто-реконект: якщо потік урветься — приймач сам перепідключиться; Ctrl-C для виходу)"
+while true; do
+    gst-launch-1.0 tcpclientsrc host="$BOARD_IP" port="$PORT" \
+        ! h265parse ! mppvideodec \
+        ! queue leaky=downstream max-size-buffers=1 max-size-time=0 max-size-bytes=0 \
+        ! $SINK
+    rc=$?
+    # Ctrl-C (130) — вихід; інакше потік урвався → перепідключитись
+    [ $rc -eq 130 ] && break
+    echo "потік урвався (rc=$rc) — перепідключення через 2с..."; sleep 2
+done
