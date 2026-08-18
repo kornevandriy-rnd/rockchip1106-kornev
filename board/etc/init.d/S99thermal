@@ -22,7 +22,10 @@ LOG=/tmp/thermal.log
 WLOG=/tmp/thermal_watchdog.log
 PIDFILE=/tmp/thermal_sup.pid
 PORT=5000
-FPS=60
+# 25 к/с: удвічі менший USB-трафік, ніж 60 — прибирає EOVERFLOW (-75) і
+# «disabled by hub (EMI?)», що валили хаб під тривалим стрімом. Тепловізору
+# більше й не треба. За потреби зменшити ще (15), якщо камера/USB марджинальні.
+FPS=25
 export LD_LIBRARY_PATH=/oem/usr/lib
 
 # devnum USB-камери Seek (VID 3474); змінюється при кожній переенумерації

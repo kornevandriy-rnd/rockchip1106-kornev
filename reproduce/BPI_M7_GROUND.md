@@ -120,6 +120,7 @@ DISPLAY=:0 gst-launch-1.0 tcpclientsrc host=192.168.50.2 port=5000 \
 | на платі стрибає `Pipeline fps` (7↔60) + багато `V4L2 dropped`, велика затримка | приймач із `videoconvert` (CPU) не встигає → TCP підпирає sender. Прибрати `videoconvert`, вести NV12 прямо в `rkximagesink`/`glimagesink` + `queue leaky=downstream max-size-buffers=1`. Стає `60.0 fps, dropped 0` |
 | приймач: `Failed to connect … 拒绝连接 / Connection refused` | плата жива, але sender **не запущений** — спершу Т1 (sender), дочекатись `Listening on TCP port 5000`, тоді Т2 |
 | приймач: `Failed to connect … 连接超时 / timeout` | BPI загубив IPv4 на `end0` (NM) АБО плата впала — перевір `ip -br addr show end0` і `ping`; IP зробити постійним через `nmcli` (розд.1) |
+| на платі `VIDIOC_DQBUF: No such device`, у `dmesg` `uvcvideo: Non-zero status (-75)` + `disabled by hub (EMI?)` + `USB disconnect` | USB захлинається під високим fps (ізохронний **EOVERFLOW**), хаб глушить порт і камера відпадає. **Знизити fps** (`--fps 25` або менше) — удвічі менший USB-трафік. Якщо лишається — коротший/екранований USB-кабель, окреме стабільне 5V на хаб. Node USB-камери шукати серед групи `Camera (usb-…)` у `v4l2-ctl --list-devices` (нумерація `/dev/videoN` плаває після переенумерації) |
 | sender «завис» після рядка `Camera … HEVC …` | нормально: чекає приймача. Запустити Т2 — піде `Receiver connected` |
 | ffmpeg на BPI не ставиться (пакети held) | не боротись з apt — декодувати через gstreamer `mppvideodec` |
 
