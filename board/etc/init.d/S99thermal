@@ -1,0 +1,84 @@
+#!/bin/sh
+#
+# S99thermal — автозапуск тепловізійного H.265-sender'а на RV1106.
+#
+# Виконується BusyBox-ініт (rcS) ПІСЛЯ штатного S21appinit, який стартує камерний
+# застосунок rkipc. Тут ми: коректно зупиняємо rkipc/ispserver (щоб звільнити
+# камеру й VEPU), чекаємо появи USB-камери (YUYV-нода «плаває»), і піднімаємо
+# /root/rv1106_sender як TCP-сервер H.265 на :5000. Лог — /tmp/thermal.log.
+#
+# Мета: увімкнув плату → sender уже слухає; на землі (BPI) лише запустити приймач.
+#
+# Встановлення на плату:  покласти в /etc/init.d/S99thermal, chmod +x.
+# Ручне керування:        /etc/init.d/S99thermal {start|stop|restart|status}
+
+BIN=/root/rv1106_sender
+LOG=/tmp/thermal.log
+PORT=5000
+FPS=60
+export LD_LIBRARY_PATH=/oem/usr/lib
+
+find_cam() {
+    for v in /dev/video*; do
+        v4l2-ctl -d "$v" --list-formats 2>/dev/null | grep -q YUYV && { echo "$v"; return 0; }
+    done
+    return 1
+}
+
+start() {
+    # 1) звільнити камеру/енкодер від штатного застосунку
+    [ -x /oem/usr/bin/RkLunch-stop.sh ] && /oem/usr/bin/RkLunch-stop.sh >/dev/null 2>&1
+    killall -9 rkipc ispserver rv1106_sender rv1106_rtsp 2>/dev/null
+    sleep 2
+
+    # 2) дочекатись YUYV-ноди камери (USB-енумерація може запізнюватись)
+    CAM=""; i=0
+    while [ $i -lt 30 ]; do
+        CAM=$(find_cam) && [ -n "$CAM" ] && break
+        i=$((i + 1)); sleep 1
+    done
+    if [ -z "$CAM" ]; then
+        echo "=== $(date) === камера (YUYV) не знайдена — перевір хаб/землю" >> "$LOG"
+        exit 1
+    fi
+
+    # 3) запустити sender; кілька спроб на випадок, якщо камера/VEPU ще зайняті
+    n=0
+    while [ $n -lt 5 ]; do
+        echo "=== $(date) === старт на $CAM (спроба $n), $PORT/${FPS}fps" >> "$LOG"
+        "$BIN" --device "$CAM" --port "$PORT" --fps "$FPS" >> "$LOG" 2>&1 &
+        PID=$!
+        sleep 3
+        if kill -0 "$PID" 2>/dev/null; then
+            echo "sender працює, pid $PID" >> "$LOG"
+            return 0
+        fi
+        echo "sender вийшов рано (камера/VEPU зайняті?), повтор" >> "$LOG"
+        killall -9 rkipc ispserver 2>/dev/null
+        n=$((n + 1)); sleep 2
+    done
+    echo "=== $(date) === не вдалося підняти sender після 5 спроб" >> "$LOG"
+    exit 1
+}
+
+stop() {
+    killall -9 rv1106_sender 2>/dev/null
+}
+
+status() {
+    if pidof rv1106_sender >/dev/null 2>&1; then
+        echo "rv1106_sender ПРАЦЮЄ (pid $(pidof rv1106_sender))"
+    else
+        echo "rv1106_sender не запущений"
+    fi
+    echo "--- хвіст $LOG ---"; tail -n 8 "$LOG" 2>/dev/null
+}
+
+case "$1" in
+    start)   start ;;
+    stop)    stop ;;
+    restart) stop; sleep 1; start ;;
+    status)  status ;;
+    *) echo "usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac
+exit 0
