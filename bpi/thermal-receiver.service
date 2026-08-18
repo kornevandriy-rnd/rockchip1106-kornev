@@ -1,0 +1,16 @@
+[Unit]
+Description=Thermal H.265 receiver on HDMI (RV1106 -> BPI-M7)
+After=graphical.target network-online.target
+Wants=graphical.target
+
+[Service]
+# Виводимо на локальний X-дисплей десктопу (той самий, де працює ручний gst).
+User=armsom
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/armsom/.Xauthority
+ExecStart=/home/armsom/thermal_receiver.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=graphical.target
