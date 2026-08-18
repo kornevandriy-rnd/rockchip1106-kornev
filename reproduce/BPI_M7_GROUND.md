@@ -51,9 +51,12 @@ sudo ping -c3 192.168.50.2          # має піти time=… ~0.5 мс
 > Щоб адреса трималась постійно — зробити її через NetworkManager:
 > ```sh
 > sudo nmcli con add type ethernet ifname end0 con-name rv1106 \
->      ipv4.method manual ipv4.addresses 192.168.50.10/24
+>      ipv4.method manual ipv4.addresses 192.168.50.10/24 ipv6.method ignore autoconnect yes
 > sudo nmcli con up rv1106
+> ip -br addr show end0     # має стало показувати 192.168.50.10/24
 > ```
+> Це перевірено: після `nmcli`-профілю адреса **тримається** й не зникає посеред
+> роботи (без нього NM стирав її ~щохвилини — це давало «плата не відповідає»).
 
 Після цього RV1106 доступний **з BPI** по SSH (пароль плати `luckfox`):
 ```sh
@@ -86,8 +89,17 @@ ssh root@192.168.50.2 'export LD_LIBRARY_PATH=/oem/usr/lib; \
 **Термінал 2 — приймач на BPI** (власний екран BPI або друга SSH-сесія в BPI):
 ```sh
 DISPLAY=:0 gst-launch-1.0 tcpclientsrc host=192.168.50.2 port=5000 \
-  ! h265parse ! mppvideodec ! videoconvert ! autovideosink sync=false
+  ! h265parse ! mppvideodec \
+  ! queue leaky=downstream max-size-buffers=1 max-size-time=0 max-size-bytes=0 \
+  ! rkximagesink sync=false
 ```
+> 🟢 **Низька затримка / рівні 60 fps.** НЕ вставляй `videoconvert` — він
+> конвертує NV12 на CPU (1280×1024@60), стає вузьким місцем, дає джиттер, TCP
+> підпирає sender → на платі стрибає `Pipeline fps` і сиплються `V4L2 dropped
+> frames`. NV12 з `mppvideodec` треба вести **прямо в апаратний сінк**
+> (`rkximagesink`; якщо його нема — `glimagesink sync=false`), а `queue
+> leaky=downstream max-size-buffers=1` тримає лише найсвіжіший кадр. З цим на
+> платі стабільні `60.0 fps, dropped 0`.
 
 Щойно Т2 під'єднається → у Т1 `Receiver connected` + `Pipeline: … fps`, а на
 моніторі BPI — тепловізійне відео 1280×1024, декодоване апаратно.
@@ -105,6 +117,9 @@ DISPLAY=:0 gst-launch-1.0 tcpclientsrc host=192.168.50.2 port=5000 \
 | `ping: socket: Operation not permitted` | ping без прав на raw-socket → запускати `sudo ping …` |
 | плата пропала **саме коли встромив камеру**, `end0` показує `LOWER_UP`, але ping мовчить | плата в ребут-лупі від камери: недоживлення / плаваюча земля. Камера — **тільки через живлений хаб**, і **спільна земля** GND плати+хаба+камери. Без цього стрім не поїде (головний блокер) |
 | `lsusb` показує лише кореневі хаби `1d6b:*` | камера фізично не на шині — воткнути через живлений хаб; шукати `ID 3474:…` |
+| на платі стрибає `Pipeline fps` (7↔60) + багато `V4L2 dropped`, велика затримка | приймач із `videoconvert` (CPU) не встигає → TCP підпирає sender. Прибрати `videoconvert`, вести NV12 прямо в `rkximagesink`/`glimagesink` + `queue leaky=downstream max-size-buffers=1`. Стає `60.0 fps, dropped 0` |
+| приймач: `Failed to connect … 拒绝连接 / Connection refused` | плата жива, але sender **не запущений** — спершу Т1 (sender), дочекатись `Listening on TCP port 5000`, тоді Т2 |
+| приймач: `Failed to connect … 连接超时 / timeout` | BPI загубив IPv4 на `end0` (NM) АБО плата впала — перевір `ip -br addr show end0` і `ping`; IP зробити постійним через `nmcli` (розд.1) |
 | sender «завис» після рядка `Camera … HEVC …` | нормально: чекає приймача. Запустити Т2 — піде `Receiver connected` |
 | ffmpeg на BPI не ставиться (пакети held) | не боротись з apt — декодувати через gstreamer `mppvideodec` |
 

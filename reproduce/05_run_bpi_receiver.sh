@@ -33,5 +33,11 @@ echo "плата на місці."
 
 echo "== приймач (HW-декод mppvideodec -> HDMI). Ctrl-C = стоп =="
 echo "   Спершу на платі має бути запущений sender (див. BPI_M7_GROUND.md, Термінал 1)."
+# Низька затримка: БЕЗ videoconvert (він жере CPU і давав джиттер/дропи на 60fps),
+# NV12 з декодера йде прямо в апаратний Rockchip-сінк; leaky-черга тримає лише
+# найсвіжіший кадр. Якщо rkximagesink недоступний — заміни на glimagesink sync=false.
+SINK="${SINK:-rkximagesink sync=false}"
 exec gst-launch-1.0 tcpclientsrc host="$BOARD_IP" port="$PORT" \
-    ! h265parse ! mppvideodec ! videoconvert ! autovideosink sync=false
+    ! h265parse ! mppvideodec \
+    ! queue leaky=downstream max-size-buffers=1 max-size-time=0 max-size-bytes=0 \
+    ! $SINK
