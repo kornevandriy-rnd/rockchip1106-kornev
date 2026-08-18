@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Thermal Receiver
+Comment=Auto-receive & display the RV1106 H.265 thermal stream on HDMI
+Exec=/home/armsom/thermal_receiver.sh
+Terminal=false
+X-GNOME-Autostart-enabled=true
