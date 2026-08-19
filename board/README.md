@@ -32,6 +32,18 @@ ssh -J armsom@192.168.0.162 root@192.168.50.2 'chmod +x /etc/init.d/S99thermal &
 `/root/rv1106_sender` має бути на платі (той самий бінар, що ми деплоїли).
 Перевірка: `ssh -J armsom@192.168.0.162 root@192.168.50.2 'ls -l /root/rv1106_sender'`.
 
+### Режим виходу: TCP (прямий тракт) або RTSP (Beam)
+
+Автозапуск уміє два режими, перемикач — файл `/root/thermal_mode`:
+- `tcp` (деф.) — `rv1106_sender` на `:5000`, для прямого тракту RV1106↔BPI;
+- `rtsp` — `rv1106_rtsp` на `rtsp://<IP>:554/live/0`, щоб віддавати камеру в Sine.video Beam.
+
+Перемкнути:
+```sh
+echo rtsp > /root/thermal_mode   # (або: echo tcp > /root/thermal_mode)
+/etc/init.d/S99thermal restart
+```
+
 ### Ручне керування / діагностика
 
 ```sh

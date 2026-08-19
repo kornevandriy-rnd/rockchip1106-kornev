@@ -28,6 +28,11 @@ PORT=5000
 FPS=25
 export LD_LIBRARY_PATH=/oem/usr/lib
 
+# Режим виходу: tcp (rv1106_sender :5000, для прямого тракту на BPI) або
+# rtsp (rv1106_rtsp :554/live/0, для Sine.video Beam). Перемикач — файл
+# /root/thermal_mode; за замовчуванням tcp.
+MODE=$(cat /root/thermal_mode 2>/dev/null || echo tcp)
+
 # devnum USB-камери Seek (VID 3474); змінюється при кожній переенумерації
 cam_devnum() {
     for d in /sys/bus/usb/devices/*; do
@@ -38,9 +43,11 @@ cam_devnum() {
     return 1
 }
 
-# перша YUYV-нода (USB-камера)
+# нода USB-камери Seek: саме USB (Bus info … usb) + YUYV, щоб не вхопити
+# платформну ISP-ноду (rkcif/rkisp теж бувають YUYV).
 cam_node() {
     for v in /dev/video*; do
+        v4l2-ctl -d "$v" --all 2>/dev/null | grep -q "Bus info.*usb" || continue
         if v4l2-ctl -d "$v" --list-formats 2>/dev/null | grep -q YUYV; then
             echo "$v"; return 0
         fi
@@ -55,10 +62,15 @@ disable_autosuspend() {
 
 launch_sender() {
     CAM=$(cam_node) || { echo "$(date) launch: камери нема" >> "$WLOG"; return 1; }
-    echo "=== $(date) === старт на $CAM ($PORT/${FPS}fps)" >> "$LOG"
-    "$BIN" --device "$CAM" --port "$PORT" --fps "$FPS" >> "$LOG" 2>&1 &
+    if [ "$MODE" = "rtsp" ]; then
+        echo "=== $(date) === RTSP старт на $CAM (:554/live/0, ${FPS}fps)" >> "$LOG"
+        /root/rv1106_rtsp --device "$CAM" --port 554 --path /live/0 --fps "$FPS" >> "$LOG" 2>&1 &
+    else
+        echo "=== $(date) === TCP старт на $CAM (:$PORT, ${FPS}fps)" >> "$LOG"
+        "$BIN" --device "$CAM" --port "$PORT" --fps "$FPS" >> "$LOG" 2>&1 &
+    fi
     SENDER_PID=$!
-    echo "$(date) sender pid $SENDER_PID на $CAM" >> "$WLOG"
+    echo "$(date) [$MODE] sender pid $SENDER_PID на $CAM" >> "$WLOG"
     return 0
 }
 
@@ -86,7 +98,7 @@ supervise() {
         # 1) камера переенумерувалась → нода/fd застаріли → перезапуск
         if [ -n "$NOW" ] && [ -n "$LAST" ] && [ "$NOW" != "$LAST" ]; then
             echo "$(date) камера переенумерувалась ($LAST->$NOW) → рестарт sender" >> "$WLOG"
-            kill -9 "$SENDER_PID" 2>/dev/null; killall -9 rv1106_sender 2>/dev/null
+            kill -9 "$SENDER_PID" 2>/dev/null; killall -9 rv1106_sender rv1106_rtsp 2>/dev/null
             sleep 1; disable_autosuspend; launch_sender; LAST=$(cam_devnum); continue
         fi
         # 2) sender впав → перезапуск
@@ -97,7 +109,7 @@ supervise() {
         # 3) камера повністю зникла → чекаємо, скидаємо, перезапускаємо
         if [ -z "$NOW" ]; then
             echo "$(date) камера зникла → чекаю появи" >> "$WLOG"
-            kill -9 "$SENDER_PID" 2>/dev/null; killall -9 rv1106_sender 2>/dev/null
+            kill -9 "$SENDER_PID" 2>/dev/null; killall -9 rv1106_sender rv1106_rtsp 2>/dev/null
             wait_cam
             sleep 1; disable_autosuspend; launch_sender; LAST=$(cam_devnum)
         fi
@@ -116,7 +128,7 @@ start() {
 stop() {
     [ -f "$PIDFILE" ] && kill -9 "$(cat "$PIDFILE")" 2>/dev/null
     rm -f "$PIDFILE"
-    killall -9 rv1106_sender 2>/dev/null
+    killall -9 rv1106_sender rv1106_rtsp 2>/dev/null
     echo "зупинено"
 }
 
@@ -126,10 +138,13 @@ status() {
     else
         echo "supervisor не запущений"
     fi
+    echo "режим: $MODE"
     if pidof rv1106_sender >/dev/null 2>&1; then
-        echo "rv1106_sender ПРАЦЮЄ (pid $(pidof rv1106_sender)), камера devnum=$(cam_devnum)"
+        echo "rv1106_sender (TCP) ПРАЦЮЄ (pid $(pidof rv1106_sender)), камера devnum=$(cam_devnum)"
+    elif pidof rv1106_rtsp >/dev/null 2>&1; then
+        echo "rv1106_rtsp (RTSP) ПРАЦЮЄ (pid $(pidof rv1106_rtsp)), камера devnum=$(cam_devnum)"
     else
-        echo "rv1106_sender не запущений"
+        echo "sender не запущений"
     fi
     echo "--- $LOG ---"; tail -n 6 "$LOG" 2>/dev/null
     echo "--- $WLOG ---"; tail -n 6 "$WLOG" 2>/dev/null
