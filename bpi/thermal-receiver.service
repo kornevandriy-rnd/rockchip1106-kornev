@@ -1,7 +1,7 @@
 [Unit]
-Description=Thermal H.265 receiver on HDMI (RV1106 -> BPI-M7)
+Description=Thermal H.265 receiver on HDMI (Sine.video Beam -> BPI-M7)
 After=graphical.target network-online.target
-Wants=graphical.target
+Wants=graphical.target network-online.target
 
 [Service]
 # Виводимо на локальний X-дисплей десктопу (той самий, де працює ручний gst).
