@@ -28,7 +28,8 @@
 
 BEAM_RX="${BEAM_RX:-192.168.1.21}"   # наземний Beam — кому шлемо keepalive
 GCS_IP="${GCS_IP:-192.168.1.2}"      # адреса приймача (куди Beam штовхає відео)
-IFACE="${IFACE:-end1}"               # порт, у який встромлений Beam RX
+IFACE="${IFACE:-end0}"               # порт, у який встромлений Beam RX
+NMCON="${NMCON:-beam-e0}"            # nmcli-профіль зі статикою 192.168.1.2 на IFACE
 VIDEO_PORT="${VIDEO_PORT:-5700}"     # порт, на який Beam штовхає відео
 export DISPLAY="${DISPLAY:-:0}"
 export XAUTHORITY="${XAUTHORITY:-/home/armsom/.Xauthority}"
@@ -36,11 +37,11 @@ export XAUTHORITY="${XAUTHORITY:-/home/armsom/.Xauthority}"
 # пауза на підняття мережі/екрана після завантаження
 sleep 5
 
-# 1) переконатись, що на end1 є 192.168.1.2 (інакше пінг не піде і відео не буде).
+# 1) переконатись, що на IFACE є 192.168.1.2 (інакше пінг не піде і відео не буде).
 i=0
 while [ "$i" -lt 30 ]; do
     ip -o addr show "$IFACE" 2>/dev/null | grep -q "$GCS_IP" && break
-    sudo nmcli con up beam-ground 2>/dev/null \
+    sudo nmcli con up "$NMCON" 2>/dev/null \
         || sudo ip addr add "$GCS_IP/24" dev "$IFACE" 2>/dev/null
     i=$((i + 1)); sleep 2
 done

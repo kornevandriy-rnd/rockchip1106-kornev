@@ -30,19 +30,25 @@ Beam **не віддає RTSP на землі** — він штовхає **RTP/
 Ці три речі ставляться **один раз** (з правами root; далі служба їх не потребує):
 
 ```sh
-# 1) статичний IP на порту, у який встромлений Beam RX (end1)
-sudo nmcli con add type ethernet ifname end1 con-name beam-ground ip4 192.168.1.2/24
-sudo nmcli con up beam-ground
+# 1) статичний IP на порту, у який встромлений Beam RX.
+#    Кернел BPI НЕ підтримує bridge, тож просто прив'язуємо адресу до потрібного
+#    порту. Дізнатись, де кабель: той порт, що LOWER_UP:
+ip -o link show end0 | grep -oE "LOWER_UP|NO-CARRIER"
+ip -o link show end1 | grep -oE "LOWER_UP|NO-CARRIER"
+# профіль на порт із кабелем (нижче — end0; якщо кабель у end1, заміни end0->end1
+# і beam-e0->beam-e1, та у службі: NMCON=beam-e1 IFACE=end1):
+sudo nmcli con add type ethernet ifname end0 con-name beam-e0 \
+  ipv4.method manual ipv4.addresses 192.168.1.2/24 ipv6.method disabled
+sudo nmcli con up beam-e0
 
 # 2) тюнінг: великий буфер сокета (густий потік дрібних пакетів) + ping без root
-#    (keepalive-пінг у службі має працювати від користувача armsom)
 printf 'net.core.rmem_max=16777216\nnet.ipv4.ping_group_range=0 2147483647\n' \
   | sudo tee /etc/sysctl.d/99-beam.conf
 sudo sysctl --system
 ```
 
-> `end1` — порт, де лінк живий (`ip -o link show end1` → `LOWER_UP`). Якщо Beam
-> встромлений в `end0`, підстав його в командах вище.
+> ВАЖЛИВО: адреса `192.168.1.2` має бути **тільки на одному** порту (тому, де
+> кабель). Якщо задати обидва — конфлікт адрес і «Destination Host Unreachable».
 
 ## Встановлення служби (на BPI)
 
