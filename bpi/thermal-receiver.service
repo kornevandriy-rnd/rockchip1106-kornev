@@ -11,6 +11,9 @@ Environment=XAUTHORITY=/home/armsom/.Xauthority
 ExecStart=/home/armsom/thermal_receiver.sh
 Restart=always
 RestartSec=3
+# гасити всю групу процесів (gst + keepalive-ping) і не висіти на таймауті
+KillMode=control-group
+TimeoutStopSec=10
 
 [Install]
 WantedBy=graphical.target
