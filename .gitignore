@@ -2,3 +2,9 @@ prebuilt/
 rv1106_sender/rv1106_sender
 fedora_receiver/fedora_receiver
 **/build/
+rv1106_rtsp/rv1106_rtsp
+__pycache__/
+*.pyc
+rv1106_ctl/rv1106_ctl
+rv1106_ctl/rv1106_ctl_host
+delivery/state_2026-10-23/*.param

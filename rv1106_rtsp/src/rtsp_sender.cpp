@@ -28,6 +28,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+
+#include "mav_state.h"
+#include "osd.h"
 #include <vector>
 
 #include "im2d.hpp"
@@ -61,6 +64,9 @@ struct Config {
     unsigned port = 554;              // RTSP-порт (Beam тягне з нього)
     std::string path = "/live/0";     // RTSP-шлях
     unsigned camera_buffers = 4;
+    std::string mav = "off";          // польотник: "uart:/dev/ttyS3:115200" | "udp:14550" | "off"
+    bool osd = true;                  // накладати HUD (діє, лише коли задано --mav)
+    bool mav_request = true;          // просити в польотника потрібні потоки (heartbeat + SET_MESSAGE_INTERVAL)
 };
 
 struct CameraBuffer {
@@ -99,7 +105,10 @@ void usage(const char *program) {
         "  --bitrate N         H.265 CBR bitrate in kbit/s (default 8000)\n"
         "  --gop N             GOP length (default 60)\n"
         "  --port N            RTSP port (default 554)\n"
-        "  --path STR          RTSP path (default /live/0)\n",
+        "  --path STR          RTSP path (default /live/0)\n"
+        "  --mav SPEC          flight controller: uart:/dev/ttyS3:115200 | udp:14550 | off (default off)\n"
+        "  --osd 0|1           burn the HUD into the video when --mav is set (default 1)\n"
+        "  --mav-request 0|1   transmit heartbeat/stream requests to the flight controller (default 1; 0 = listen only)\n",
         program);
 }
 
@@ -125,6 +134,9 @@ Config parse_args(int argc, char **argv) {
         else if (!std::strcmp(argv[i - 1], "--gop")) cfg.gop = parse_u32("gop", value, 1);
         else if (!std::strcmp(argv[i - 1], "--port")) cfg.port = parse_u32("port", value, 1);
         else if (!std::strcmp(argv[i - 1], "--path")) cfg.path = value;
+        else if (!std::strcmp(argv[i - 1], "--mav")) cfg.mav = value;
+        else if (!std::strcmp(argv[i - 1], "--osd")) cfg.osd = parse_u32("osd", value, 0) != 0;
+        else if (!std::strcmp(argv[i - 1], "--mav-request")) cfg.mav_request = parse_u32("mav-request", value, 0) != 0;
         else {
             std::fprintf(stderr, "Unknown option: %s\n", argv[i - 1]);
             usage(argv[0]);
@@ -430,9 +442,13 @@ public:
     }
 
     void request_idr() { RK_MPI_VENC_RequestIDR(0, RK_TRUE); }
+    void set_osd(MavReader *mav, Osd *osd) { mav_ = mav; osd_ = osd; }
 
     bool encode(const void *yuyv, uint64_t sequence, RtspOutput &rtsp) {
         std::memcpy(input_address_, yuyv, input_size_);
+        // HUD малюємо у вже скопійований YUYV-буфер ДО скидання кешу і апскейлу: нуль додаткових кеш-операцій над кадром 1280x1024.
+        if (mav_ && osd_) osd_->draw(static_cast<uint8_t *>(input_address_), static_cast<int>(cfg_.input_width), static_cast<int>(cfg_.input_height),
+                                     mav_->snapshot(), mono_now());
         RK_MPI_SYS_MmzFlushCache(input_mb_, RK_FALSE);
 
         IM_STATUS rga_status = imresize(input_image_, output_image_);
@@ -494,6 +510,8 @@ private:
     MB_BLK input_mb_ = nullptr;
     MB_BLK output_mb_ = nullptr;
     void *input_address_ = nullptr;
+    MavReader *mav_ = nullptr;
+    Osd *osd_ = nullptr;
     rga_buffer_handle_t input_rga_ = 0;
     rga_buffer_handle_t output_rga_ = 0;
     rga_buffer_t input_image_{};
@@ -513,8 +531,18 @@ int main(int argc, char **argv) {
     Camera camera;
     Pipeline pipeline;
     RtspOutput rtsp;
+    MavReader mav;
+    Osd osd;
     if (!camera.open_camera(cfg) || !pipeline.init(cfg) || !rtsp.start(cfg.port, cfg.path))
         return EXIT_FAILURE;
+    if (cfg.mav != "off") {
+        if (mav.start(cfg.mav, cfg.mav_request)) {
+            if (cfg.osd) pipeline.set_osd(&mav, &osd);
+            std::printf("MAVLink: %s%s · OSD %s\n", cfg.mav.c_str(), cfg.mav_request ? "" : " (лише слухаємо)", cfg.osd ? "ON" : "off");
+        } else {
+            std::printf("MAVLink не запущено: %s\n", mav.status().c_str());
+        }
+    }
 
     std::printf("Camera %ux%u YUYV @ %u fps; RGA -> %ux%u NV12; HEVC %u kbit/s\n",
                 cfg.input_width, cfg.input_height, cfg.fps,

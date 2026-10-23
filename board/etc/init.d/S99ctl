@@ -1,0 +1,26 @@
+#!/bin/sh
+#
+# S99ctl — демон керування rv1106_ctl: TCP :5001 (JSON) <-> UART камери ESP32 (921600).
+# Незалежний від S99thermal (відео), щоб рестарт sender'а не рвав канал керування.
+# UART-пристрій: /root/ctl_tty (деф. /dev/ttyS3). Лог: /tmp/ctl.log.
+# Керування: /etc/init.d/S99ctl {start|stop|restart|status}
+
+BIN=/root/rv1106_ctl
+LOG=/tmp/ctl.log
+TTY=$(cat /root/ctl_tty 2>/dev/null || echo /dev/ttyS3)
+
+case "$1" in
+    start)
+        pidof rv1106_ctl >/dev/null 2>&1 && { echo "вже працює"; exit 0; }
+        # сам перезапускається, якщо впаде
+        ( while true; do "$BIN" --tty "$TTY" >> "$LOG" 2>&1; sleep 2; done ) &
+        echo "rv1106_ctl запущено ($TTY)" ;;
+    stop)
+        pkill -f "rv1106_ctl --tty" 2>/dev/null; killall rv1106_ctl 2>/dev/null; echo "зупинено" ;;
+    restart) "$0" stop; sleep 1; "$0" start ;;
+    status)
+        pidof rv1106_ctl >/dev/null 2>&1 && echo "rv1106_ctl ПРАЦЮЄ (pid $(pidof rv1106_ctl)), tty=$TTY" || echo "rv1106_ctl не запущений"
+        tail -n 6 "$LOG" 2>/dev/null ;;
+    *) echo "usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac
+exit 0

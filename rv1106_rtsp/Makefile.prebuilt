@@ -43,8 +43,9 @@ check:
 	@[ -f "$(LIBDIR)/librockit.so" ] && [ -f "$(LIBDIR)/librockchip_mpp.so" ] && [ -f "$(LIBDIR)/librga.so" ] \
 	  || { echo "!!! у $(LIBDIR)/ потрібні librockit.so, librockchip_mpp.so, librga.so (scp з плати або cp з ../rv1106_sender/prebuilt)"; exit 1; }
 
-$(TARGET): src/rtsp_sender.cpp
-	$(CXX) $(CXXFLAGS) $< $(RTSP_LIB) -o $@ $(LDFLAGS)
+SRCS := src/rtsp_sender.cpp src/mav_state.cpp src/osd.cpp
+$(TARGET): $(SRCS) src/mav_state.h src/osd.h src/font8x16.h
+	$(CXX) $(CXXFLAGS) $(SRCS) $(RTSP_LIB) -o $@ $(LDFLAGS)
 	@echo "Готово: $(TARGET)"
 	@echo "На плату:  scp $(TARGET) root@192.168.50.2:/root/"
 
